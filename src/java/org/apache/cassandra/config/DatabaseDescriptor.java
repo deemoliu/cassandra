@@ -5309,4 +5309,34 @@ public class DatabaseDescriptor
     {
         conf.paxos_repair_race_wait = paxosRepairRaceWait;
     }
+
+    public static boolean getEnableRemoteQuorumWriteOverride()
+    {
+        return conf.enable_remote_quorum_write_override;
+    }
+
+    public static void setEnableRemoteQuorumWriteOverride(boolean enabled)
+    {
+        conf.enable_remote_quorum_write_override = enabled;
+    }
+
+    public static boolean getEnableRemoteQuorumReadOverride()
+    {
+        return conf.enable_remote_quorum_read_override;
+    }
+
+    public static void setEnableRemoteQuorumReadOverride(boolean enabled)
+    {
+        conf.enable_remote_quorum_read_override = enabled;
+    }
+
+    public static Map<String, String> getRemoteQuorumTargetDataCenters()
+    {
+        return conf.remote_quorum_target_data_centers;
+    }
+
+    public static void setRemoteQuorumTargetDataCenters(Map<String, String> targetDataCenters)
+    {
+        conf.remote_quorum_target_data_centers = targetDataCenters;
+    }
 }

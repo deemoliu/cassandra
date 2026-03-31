@@ -1415,4 +1415,16 @@ public class FBUtilities
         }
         throw new IllegalArgumentException("Error while trying to parse kernel version - no version found");
     }
+
+    /**
+     * Returns the target remote datacenter for the local DC, as configured in
+     * {@code remote_quorum_target_data_centers}. If no mapping exists, returns
+     * the local datacenter itself.
+     */
+    public static String getTargetRemoteDcOrLocal()
+    {
+        String localDc = DatabaseDescriptor.getLocalDataCenter();
+        Map<String, String> targetDcs = DatabaseDescriptor.getRemoteQuorumTargetDataCenters();
+        return targetDcs != null ? targetDcs.getOrDefault(localDc, localDc) : localDc;
+    }
 }

@@ -876,6 +876,11 @@ public class Config
     public volatile Set<ConsistencyLevel> read_consistency_levels_disallowed = Collections.emptySet();
     public volatile Set<ConsistencyLevel> write_consistency_levels_warned = Collections.emptySet();
     public volatile Set<ConsistencyLevel> write_consistency_levels_disallowed = Collections.emptySet();
+
+    public volatile boolean enable_remote_quorum_write_override = false;
+    public volatile boolean enable_remote_quorum_read_override = false;
+    public volatile Map<String, String> remote_quorum_target_data_centers = Collections.emptyMap();
+
     public volatile boolean user_timestamps_enabled = true;
     public volatile boolean alter_table_enabled = true;
     public volatile boolean group_by_enabled = true;

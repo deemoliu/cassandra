@@ -23,7 +23,9 @@ import java.util.Locale;
 import com.carrotsearch.hppc.ObjectIntHashMap;
 import org.apache.cassandra.locator.Endpoints;
 import org.apache.cassandra.locator.InOurDc;
+import org.apache.cassandra.locator.InRemoteDc;
 import org.apache.cassandra.schema.TableMetadata;
+import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 import org.apache.cassandra.locator.AbstractReplicationStrategy;
@@ -45,7 +47,8 @@ public enum ConsistencyLevel
     SERIAL      (8),
     LOCAL_SERIAL(9, true),
     LOCAL_ONE   (10, true),
-    NODE_LOCAL  (11, true);
+    NODE_LOCAL  (11, true),
+    REMOTE_QUORUM(12);
 
     // Used by the binary protocol
     public final int code;
@@ -151,6 +154,8 @@ public enum ConsistencyLevel
             case LOCAL_QUORUM:
             case LOCAL_SERIAL:
                 return localQuorumForOurDc(replicationStrategy);
+            case REMOTE_QUORUM:
+                return localQuorumFor(replicationStrategy, FBUtilities.getTargetRemoteDcOrLocal());
             case EACH_QUORUM:
                 if (replicationStrategy instanceof NetworkTopologyStrategy)
                 {
@@ -181,6 +186,9 @@ public enum ConsistencyLevel
             case LOCAL_ONE: case LOCAL_QUORUM: case LOCAL_SERIAL:
                 // we will only count local replicas towards our response count, as these queries only care about local guarantees
                 blockFor += pending.count(InOurDc.replicas());
+                break;
+            case REMOTE_QUORUM:
+                blockFor += pending.count(InRemoteDc.replicas());
                 break;
             case ONE: case TWO: case THREE:
             case QUORUM: case EACH_QUORUM:
@@ -235,6 +243,8 @@ public enum ConsistencyLevel
             case SERIAL:
             case LOCAL_SERIAL:
                 throw new InvalidRequestException(this + " is not supported as conditional update commit consistency. Use ANY if you mean \"make sure it is accepted but I don't care how many replicas commit it for non-SERIAL reads\"");
+            case REMOTE_QUORUM:
+                throw new InvalidRequestException("REMOTE_QUORUM is not supported as conditional update commit consistency");
         }
     }
 
@@ -253,6 +263,9 @@ public enum ConsistencyLevel
     {
         if (this == ConsistencyLevel.ANY)
             throw new InvalidRequestException("Consistency level ANY is not yet supported for counter table " + metadata.name);
+
+        if (this == ConsistencyLevel.REMOTE_QUORUM)
+            throw new InvalidRequestException("Consistency level REMOTE_QUORUM is not supported for counter table " + metadata.name);
 
         if (isSerialConsistency())
             throw new InvalidRequestException("Counter operations are inherently non-serializable");

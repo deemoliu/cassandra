@@ -53,6 +53,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
@@ -920,6 +921,58 @@ public class DatabaseDescriptorTest
                 assertThat(DatabaseDescriptor.getCommitLogWriteDiskAccessMode()).isEqualTo(expectedAuto);
             else
                 assertThat(DatabaseDescriptor.getCommitLogWriteDiskAccessMode()).isEqualTo(mode);
+        }
+    }
+
+    @Test
+    public void testRemoteQuorumWriteOverride()
+    {
+        boolean original = DatabaseDescriptor.getEnableRemoteQuorumWriteOverride();
+        try
+        {
+            DatabaseDescriptor.setEnableRemoteQuorumWriteOverride(true);
+            assertTrue(DatabaseDescriptor.getEnableRemoteQuorumWriteOverride());
+            DatabaseDescriptor.setEnableRemoteQuorumWriteOverride(false);
+            assertFalse(DatabaseDescriptor.getEnableRemoteQuorumWriteOverride());
+        }
+        finally
+        {
+            DatabaseDescriptor.setEnableRemoteQuorumWriteOverride(original);
+        }
+    }
+
+    @Test
+    public void testRemoteQuorumReadOverride()
+    {
+        boolean original = DatabaseDescriptor.getEnableRemoteQuorumReadOverride();
+        try
+        {
+            DatabaseDescriptor.setEnableRemoteQuorumReadOverride(true);
+            assertTrue(DatabaseDescriptor.getEnableRemoteQuorumReadOverride());
+            DatabaseDescriptor.setEnableRemoteQuorumReadOverride(false);
+            assertFalse(DatabaseDescriptor.getEnableRemoteQuorumReadOverride());
+        }
+        finally
+        {
+            DatabaseDescriptor.setEnableRemoteQuorumReadOverride(original);
+        }
+    }
+
+    @Test
+    public void testRemoteQuorumTargetDataCenters()
+    {
+        java.util.Map<String, String> original = DatabaseDescriptor.getRemoteQuorumTargetDataCenters();
+        try
+        {
+            java.util.Map<String, String> targets = new java.util.HashMap<>();
+            targets.put("dc1", "dc2");
+            targets.put("dc2", "dc1");
+            DatabaseDescriptor.setRemoteQuorumTargetDataCenters(targets);
+            assertEquals(targets, DatabaseDescriptor.getRemoteQuorumTargetDataCenters());
+        }
+        finally
+        {
+            DatabaseDescriptor.setRemoteQuorumTargetDataCenters(original);
         }
     }
 }

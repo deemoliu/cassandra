@@ -77,6 +77,7 @@ import static org.apache.cassandra.db.ConsistencyLevel.localQuorumFor;
 import static org.apache.cassandra.db.ConsistencyLevel.localQuorumForOurDc;
 import static org.apache.cassandra.locator.Replicas.addToCountPerDc;
 import static org.apache.cassandra.locator.Replicas.countInOurDc;
+import static org.apache.cassandra.locator.Replicas.countInRemoteDc;
 import static org.apache.cassandra.locator.Replicas.countPerDc;
 
 public class ReplicaPlans
@@ -119,6 +120,12 @@ public class ReplicaPlans
                         fullCount += count.fullReplicas();
                     }
                     return fullCount > 0;
+                }
+                // Fallthough on purpose for SimpleStrategy
+            case REMOTE_QUORUM:
+                if (replicationStrategy instanceof NetworkTopologyStrategy)
+                {
+                    return countInRemoteDc(liveReplicas).hasAtleast(localQuorumFor(replicationStrategy, FBUtilities.getTargetRemoteDcOrLocal()), 1);
                 }
                 // Fallthough on purpose for SimpleStrategy
             default:
@@ -180,6 +187,22 @@ public class ReplicaPlans
                     }
                     if (totalFull < blockForFullReplicas)
                         throw UnavailableException.create(consistencyLevel, blockFor, total, blockForFullReplicas, totalFull);
+                    break;
+                }
+                // Fallthough on purpose for SimpleStrategy
+            case REMOTE_QUORUM:
+                if (replicationStrategy instanceof NetworkTopologyStrategy)
+                {
+                    Replicas.ReplicaCount remoteLive = countInRemoteDc(allLive);
+                    if (!remoteLive.hasAtleast(blockFor, blockForFullReplicas))
+                    {
+                        if (logger.isTraceEnabled())
+                        {
+                            logger.trace(String.format("Remote replicas %s are insufficient to satisfy REMOTE_QUORUM requirement of %d live replicas and %d full replicas in '%s'",
+                                                       allLive.filter(InRemoteDc.replicas()), blockFor, blockForFullReplicas, FBUtilities.getTargetRemoteDcOrLocal()));
+                        }
+                        throw UnavailableException.create(consistencyLevel, blockFor, blockForFullReplicas, remoteLive.allReplicas(), remoteLive.fullReplicas());
+                    }
                     break;
                 }
                 // Fallthough on purpose for SimpleStrategy
@@ -446,7 +469,22 @@ public class ReplicaPlans
 
     public static ReplicaPlan.ForWrite forWrite(Keyspace keyspace, ConsistencyLevel consistencyLevel, Token token, Selector selector) throws UnavailableException
     {
-        return forWrite(keyspace, consistencyLevel, ReplicaLayout.forTokenWriteLiveAndDown(keyspace, token), selector);
+        ReplicaLayout.ForTokenWrite liveAndDown = ReplicaLayout.forTokenWriteLiveAndDown(keyspace, token);
+        ReplicaLayout.ForTokenWrite live = liveAndDown.filter(FailureDetector.isReplicaAlive);
+        AbstractReplicationStrategy replicationStrategy = liveAndDown.replicationStrategy();
+        if (DatabaseDescriptor.getEnableRemoteQuorumWriteOverride()
+            && consistencyLevel == ConsistencyLevel.LOCAL_QUORUM
+            && replicationStrategy instanceof NetworkTopologyStrategy)
+        {
+            int localBlockFor = consistencyLevel.blockForWrite(replicationStrategy, liveAndDown.pending());
+            Replicas.ReplicaCount localLive = countInOurDc(live.all());
+            if (!localLive.hasAtleast(localBlockFor, 0))
+            {
+                logger.info("LOCAL_QUORUM write cannot be satisfied locally ({} live, {} required), falling back to REMOTE_QUORUM", localLive.allReplicas(), localBlockFor);
+                return forWrite(keyspace, ConsistencyLevel.REMOTE_QUORUM, liveAndDown, live, selector);
+            }
+        }
+        return forWrite(keyspace, consistencyLevel, liveAndDown, selector);
     }
 
     @VisibleForTesting
@@ -667,6 +705,13 @@ public class ReplicaPlans
         });
     }
 
+    private static <E extends Endpoints<E>> E contactForRemoteQuorumRead(AbstractReplicationStrategy replicationStrategy, ConsistencyLevel consistencyLevel, boolean alwaysSpeculate, E candidates)
+    {
+        E remoteCandidates = candidates.filter(InRemoteDc.replicas());
+        int count = consistencyLevel.blockFor(replicationStrategy) + (alwaysSpeculate ? 1 : 0);
+        return remoteCandidates.subList(0, Math.min(count, remoteCandidates.size()));
+    }
+
     private static <E extends Endpoints<E>> E contactForRead(AbstractReplicationStrategy replicationStrategy, ConsistencyLevel consistencyLevel, boolean alwaysSpeculate, E candidates)
     {
         /*
@@ -680,6 +725,9 @@ public class ReplicaPlans
          */
         if (consistencyLevel == EACH_QUORUM && replicationStrategy instanceof NetworkTopologyStrategy)
             return contactForEachQuorumRead((NetworkTopologyStrategy) replicationStrategy, candidates);
+
+        if (consistencyLevel == ConsistencyLevel.REMOTE_QUORUM && replicationStrategy instanceof NetworkTopologyStrategy)
+            return contactForRemoteQuorumRead(replicationStrategy, consistencyLevel, alwaysSpeculate, candidates);
 
         int count = consistencyLevel.blockFor(replicationStrategy) + (alwaysSpeculate ? 1 : 0);
         return candidates.subList(0, Math.min(count, candidates.size()));
@@ -720,6 +768,23 @@ public class ReplicaPlans
                                                    SpeculativeRetryPolicy retry)
     {
         AbstractReplicationStrategy replicationStrategy = keyspace.getReplicationStrategy();
+
+        if (consistencyLevel == ConsistencyLevel.LOCAL_QUORUM && DatabaseDescriptor.getEnableRemoteQuorumReadOverride()
+            && replicationStrategy instanceof NetworkTopologyStrategy)
+        {
+            EndpointsForToken localCandidates = candidatesForRead(keyspace, indexQueryPlan, consistencyLevel, ReplicaLayout.forTokenReadLiveSorted(replicationStrategy, token).natural());
+            int localBlockFor = consistencyLevel.blockFor(replicationStrategy);
+            Replicas.ReplicaCount localLive = countInOurDc(localCandidates);
+            if (!localLive.hasAtleast(localBlockFor, 1))
+            {
+                logger.info("LOCAL_QUORUM read cannot be satisfied locally ({} live, {} required), falling back to REMOTE_QUORUM", localLive.allReplicas(), localBlockFor);
+                EndpointsForToken remoteCandidates = candidatesForRead(keyspace, indexQueryPlan, ConsistencyLevel.REMOTE_QUORUM, ReplicaLayout.forTokenReadLiveSorted(replicationStrategy, token).natural());
+                EndpointsForToken remoteContacts = contactForRead(replicationStrategy, ConsistencyLevel.REMOTE_QUORUM, retry.equals(AlwaysSpeculativeRetryPolicy.INSTANCE), remoteCandidates);
+                assureSufficientLiveReplicasForRead(replicationStrategy, ConsistencyLevel.REMOTE_QUORUM, remoteContacts);
+                return new ReplicaPlan.ForTokenRead(keyspace, replicationStrategy, ConsistencyLevel.REMOTE_QUORUM, remoteCandidates, remoteContacts);
+            }
+        }
+
         EndpointsForToken candidates = candidatesForRead(keyspace, indexQueryPlan, consistencyLevel, ReplicaLayout.forTokenReadLiveSorted(replicationStrategy, token).natural());
         EndpointsForToken contacts = contactForRead(replicationStrategy, consistencyLevel, retry.equals(AlwaysSpeculativeRetryPolicy.INSTANCE), candidates);
 
@@ -741,6 +806,23 @@ public class ReplicaPlans
                                                         int vnodeCount)
     {
         AbstractReplicationStrategy replicationStrategy = keyspace.getReplicationStrategy();
+
+        if (consistencyLevel == ConsistencyLevel.LOCAL_QUORUM && DatabaseDescriptor.getEnableRemoteQuorumReadOverride()
+            && replicationStrategy instanceof NetworkTopologyStrategy)
+        {
+            EndpointsForRange localCandidates = candidatesForRead(keyspace, indexQueryPlan, consistencyLevel, ReplicaLayout.forRangeReadLiveSorted(replicationStrategy, range).natural());
+            int localBlockFor = consistencyLevel.blockFor(replicationStrategy);
+            Replicas.ReplicaCount localLive = countInOurDc(localCandidates);
+            if (!localLive.hasAtleast(localBlockFor, 1))
+            {
+                logger.info("LOCAL_QUORUM range read cannot be satisfied locally ({} live, {} required), falling back to REMOTE_QUORUM", localLive.allReplicas(), localBlockFor);
+                EndpointsForRange remoteCandidates = candidatesForRead(keyspace, indexQueryPlan, ConsistencyLevel.REMOTE_QUORUM, ReplicaLayout.forRangeReadLiveSorted(replicationStrategy, range).natural());
+                EndpointsForRange remoteContacts = contactForRead(replicationStrategy, ConsistencyLevel.REMOTE_QUORUM, false, remoteCandidates);
+                assureSufficientLiveReplicasForRead(replicationStrategy, ConsistencyLevel.REMOTE_QUORUM, remoteContacts);
+                return new ReplicaPlan.ForRangeRead(keyspace, replicationStrategy, ConsistencyLevel.REMOTE_QUORUM, range, remoteCandidates, remoteContacts, vnodeCount);
+            }
+        }
+
         EndpointsForRange candidates = candidatesForRead(keyspace, indexQueryPlan, consistencyLevel, ReplicaLayout.forRangeReadLiveSorted(replicationStrategy, range).natural());
         EndpointsForRange contacts = contactForRead(replicationStrategy, consistencyLevel, false, candidates);
 

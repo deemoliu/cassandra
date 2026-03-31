@@ -56,6 +56,7 @@ import org.jboss.byteman.contrib.bmunit.BMUnitRunner;
 import static org.apache.cassandra.db.ConsistencyLevel.EACH_QUORUM;
 import static org.apache.cassandra.db.ConsistencyLevel.LOCAL_QUORUM;
 import static org.apache.cassandra.db.ConsistencyLevel.QUORUM;
+import static org.apache.cassandra.db.ConsistencyLevel.REMOTE_QUORUM;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -299,5 +300,74 @@ public class AssureSufficientLiveNodesTest
                                                       Consumer<Keyspace> test) throws Throwable
     {
         raceOfReplicationStrategyTest(init, alterTo, RACE_TEST_LOOPS, test);
+    }
+
+    @Test
+    public void insufficientLiveNodesRemoteQuorumTest()
+    {
+        java.util.Map<String, String> original = DatabaseDescriptor.getRemoteQuorumTargetDataCenters();
+        try
+        {
+            // Set remote DC target for datacenter1 -> datacenter2
+            java.util.Map<String, String> targetDcs = new java.util.HashMap<>();
+            targetDcs.put(DC1, DC2);
+            DatabaseDescriptor.setRemoteQuorumTargetDataCenters(targetDcs);
+
+            final KeyspaceParams params = KeyspaceParams.nts(DC1, 3, DC2, 6);
+            assertThatThrownBy(() ->
+               raceOfReplicationStrategyTest(params, params, 1,
+                                             keyspace -> ReplicaPlans.forWrite(keyspace, REMOTE_QUORUM, tk, ReplicaPlans.writeNormal))
+            ).as("Unavailable should be thrown given 3 live nodes in DC2 is less than a quorum of 6")
+             .isInstanceOf(UnavailableException.class);
+        }
+        finally
+        {
+            DatabaseDescriptor.setRemoteQuorumTargetDataCenters(original);
+        }
+    }
+
+    @Test
+    public void sufficientLiveNodesRemoteQuorumTest() throws Throwable
+    {
+        java.util.Map<String, String> original = DatabaseDescriptor.getRemoteQuorumTargetDataCenters();
+        try
+        {
+            java.util.Map<String, String> targetDcs = new java.util.HashMap<>();
+            targetDcs.put(DC1, DC2);
+            DatabaseDescriptor.setRemoteQuorumTargetDataCenters(targetDcs);
+
+            final KeyspaceParams params = KeyspaceParams.nts(DC1, 3, DC2, 3);
+            // Should not throw - DC2 has 3 replicas and quorum of 3 is 2
+            raceOfReplicationStrategyTest(params, params, 1,
+                                         keyspace -> ReplicaPlans.forWrite(keyspace, REMOTE_QUORUM, tk, ReplicaPlans.writeNormal));
+        }
+        finally
+        {
+            DatabaseDescriptor.setRemoteQuorumTargetDataCenters(original);
+        }
+    }
+
+    @Test
+    public void localQuorumFailoverEnabledWriteTest() throws Throwable
+    {
+        java.util.Map<String, String> originalTargets = DatabaseDescriptor.getRemoteQuorumTargetDataCenters();
+        boolean originalWriteOverride = DatabaseDescriptor.getEnableRemoteQuorumWriteOverride();
+        try
+        {
+            java.util.Map<String, String> targetDcs = new java.util.HashMap<>();
+            targetDcs.put(DC1, DC2);
+            DatabaseDescriptor.setRemoteQuorumTargetDataCenters(targetDcs);
+            DatabaseDescriptor.setEnableRemoteQuorumWriteOverride(true);
+
+            // With DC2 RF=3 and 3 live nodes in DC2, REMOTE_QUORUM should work
+            final KeyspaceParams params = KeyspaceParams.nts(DC1, 3, DC2, 3);
+            raceOfReplicationStrategyTest(params, params, 1,
+                                         keyspace -> ReplicaPlans.forWrite(keyspace, LOCAL_QUORUM, tk, ReplicaPlans.writeNormal));
+        }
+        finally
+        {
+            DatabaseDescriptor.setRemoteQuorumTargetDataCenters(originalTargets);
+            DatabaseDescriptor.setEnableRemoteQuorumWriteOverride(originalWriteOverride);
+        }
     }
 }

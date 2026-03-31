@@ -316,6 +316,41 @@ public class WriteResponseHandlerTest
     }
 
 
+    /**
+     * Validate that DatacenterRemoteWriteResponseHandler does the right thing on success.
+     * @throws Throwable
+     */
+    @Test
+    public void idealCLDatacenterWriteResponeHandlerRemoteWorks() throws Throwable
+    {
+        java.util.Map<String, String> originalTargets = DatabaseDescriptor.getRemoteQuorumTargetDataCenters();
+        try
+        {
+            java.util.Map<String, String> targetDcs = new java.util.HashMap<>();
+            targetDcs.put("datacenter1", "datacenter2");
+            DatabaseDescriptor.setRemoteQuorumTargetDataCenters(targetDcs);
+
+            long startingCount = ks.metric.idealCLWriteLatency.latency.getCount();
+            AbstractWriteResponseHandler awr = createWriteResponseHandler(ConsistencyLevel.REMOTE_QUORUM, ConsistencyLevel.ALL);
+
+            //dc1
+            awr.onResponse(createDummyMessage(0));
+            awr.onResponse(createDummyMessage(1));
+            awr.onResponse(createDummyMessage(2));
+            //dc2
+            awr.onResponse(createDummyMessage(3));
+            awr.onResponse(createDummyMessage(4));
+            awr.onResponse(createDummyMessage(5));
+
+            assertEquals(0,  ks.metric.writeFailedIdealCL.getCount());
+            assertEquals(startingCount + 1, ks.metric.idealCLWriteLatency.latency.getCount());
+        }
+        finally
+        {
+            DatabaseDescriptor.setRemoteQuorumTargetDataCenters(originalTargets);
+        }
+    }
+
     private static AbstractWriteResponseHandler createWriteResponseHandler(ConsistencyLevel cl, ConsistencyLevel ideal)
     {
         return createWriteResponseHandler(cl, ideal, Dispatcher.RequestTime.forImmediateExecution());

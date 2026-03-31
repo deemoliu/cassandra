@@ -77,10 +77,19 @@ public class Replicas
 
     public static ReplicaCount countInOurDc(ReplicaCollection<?> replicas)
     {
+        return countForDc(replicas, InOurDc.replicas());
+    }
+
+    public static ReplicaCount countInRemoteDc(ReplicaCollection<?> replicas)
+    {
+        return countForDc(replicas, InRemoteDc.replicas());
+    }
+
+    private static ReplicaCount countForDc(ReplicaCollection<?> replicas, Predicate<Replica> dcFilter)
+    {
         ReplicaCount count = new ReplicaCount();
-        Predicate<Replica> inOurDc = InOurDc.replicas();
         for (Replica replica : replicas)
-            if (inOurDc.test(replica))
+            if (dcFilter.test(replica))
                 count.increment(replica);
         return count;
     }

@@ -44,6 +44,7 @@ import org.apache.cassandra.locator.ReplicaCollection.Builder.Conflict;
 import org.apache.cassandra.service.AbstractWriteResponseHandler;
 import org.apache.cassandra.service.ClientState;
 import org.apache.cassandra.service.DatacenterSyncWriteResponseHandler;
+import org.apache.cassandra.service.DatacenterRemoteWriteResponseHandler;
 import org.apache.cassandra.service.DatacenterWriteResponseHandler;
 import org.apache.cassandra.service.WriteResponseHandler;
 import org.apache.cassandra.transport.Dispatcher;
@@ -159,7 +160,11 @@ public abstract class AbstractReplicationStrategy
                                                                        ConsistencyLevel idealConsistencyLevel)
     {
         AbstractWriteResponseHandler<T> resultResponseHandler;
-        if (replicaPlan.consistencyLevel().isDatacenterLocal())
+        if (replicaPlan.consistencyLevel() == ConsistencyLevel.REMOTE_QUORUM && (this instanceof NetworkTopologyStrategy))
+        {
+            resultResponseHandler = new DatacenterRemoteWriteResponseHandler<T>(replicaPlan, callback, writeType, hintOnFailure, requestTime);
+        }
+        else if (replicaPlan.consistencyLevel().isDatacenterLocal())
         {
             // block for in this context will be localnodes block.
             resultResponseHandler = new DatacenterWriteResponseHandler<T>(replicaPlan, callback, writeType, hintOnFailure, requestTime);
